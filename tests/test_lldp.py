@@ -4,12 +4,12 @@ import pytest
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_check_topo(testbed):
-    if testbed['topo']['name'] in ('ptf32','ptf64'):
+    if testbed['topo']['type'] == 'ptf':
         pytest.skip('Unsupported topology')
 
 logger = logging.getLogger(__name__)
 
-def test_lldp(localhost, ansible_adhoc, testbed):
+def test_lldp(localhost, ansible_adhoc, testbed, collect_techsupport):
     """ verify the LLDP message on DUT """
 
     hostname = testbed['dut']
@@ -35,7 +35,7 @@ def test_lldp(localhost, ansible_adhoc, testbed):
         assert v['port']['ifname'] == mg_facts['minigraph_neighbors'][k]['port']
 
 
-def test_lldp_neighbor(localhost, ansible_adhoc, testbed, eos):
+def test_lldp_neighbor(localhost, ansible_adhoc, testbed, eos, collect_techsupport):
     """ verify LLDP information on neighbors """
 
     hostname = testbed['dut']

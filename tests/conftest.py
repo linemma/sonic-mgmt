@@ -1,6 +1,7 @@
 import sys
 import os
 import glob
+import json
 import tarfile
 import logging
 import time
@@ -12,7 +13,8 @@ import ipaddr as ipaddress
 
 from ansible_host import AnsibleHost
 from collections import defaultdict
-from common.devices import SonicHost, Localhost, PTFHost
+from common.fixtures.conn_graph_facts import conn_graph_facts
+from common.devices import SonicHost, Localhost, PTFHost, EosHost, FanoutHost
 
 logger = logging.getLogger(__name__)
 
@@ -130,14 +132,7 @@ def testbed_devices(ansible_adhoc, testbed):
         ptf_host = dut.host.options["inventory_manager"].get_host(dut.hostname).get_vars()["ptf_host"]
         devices["ptf"] = PTFHost(ansible_adhoc, ptf_host)
 
-    # In the future, we can implement more classes for interacting with other testbed devices in the lib.devices
-    # module. Then, in this fixture, we can initialize more instance of the classes and store the objects in the
-    # devices dict here. For example, we could have
-    #       from common.devices import FanoutHost
-    #       devices["fanout"] = FanoutHost(ansible_adhoc, testbed["dut"])
-
     return devices
-
 
 def disable_ssh_timout(dut):
     '''
@@ -193,6 +188,47 @@ def ptfhost(testbed_devices):
 
     return testbed_devices["ptf"]
 
+@pytest.fixture(scope="module")
+def nbrhosts(ansible_adhoc, testbed, creds):
+    """
+    Shortcut fixture for getting VM host
+    """
+
+    vm_base = int(testbed['vm_base'][2:])
+    devices = {}
+    for k, v in testbed['topo']['properties']['topology']['VMs'].items():
+        devices[k] = EosHost(ansible_adhoc, "VM%04d" % (vm_base + v['vm_offset']), creds['eos_login'], creds['eos_password'])
+    return devices
+
+@pytest.fixture(scope="module")
+def fanouthosts(ansible_adhoc, conn_graph_facts, creds):
+    """
+    Shortcut fixture for getting Fanout hosts
+    """
+
+    with open('../ansible/testbed-new.yaml') as stream:
+        testbed_doc = yaml.safe_load(stream)
+
+    fanout_types = ['FanoutLeaf', 'FanoutRoot']
+    devices = {}
+    for hostname in conn_graph_facts['device_info'].keys():
+        device_info = conn_graph_facts['device_info'][hostname]
+        if device_info['Type'] in fanout_types:
+            # Use EOS if the target OS type is unknown
+            os = 'eos' if 'os' not in testbed_doc['devices'][hostname] else testbed_doc['devices'][hostname]['os']
+            device_exists = False
+            try:
+                fanout_host = FanoutHost(ansible_adhoc, os, hostname, device_info['Type'], creds['fanout_admin_user'], creds['fanout_admin_password'])
+                device_exists = True
+            except:
+                logging.warning("Couldn't found the given host(%s) in inventory file" % hostname)
+            
+            if device_exists:
+                # Index fanout host by both hostname and mgmt ip
+                devices[hostname] = fanout_host
+                devices[device_info['mgmtip']] = fanout_host
+
+    return devices
 
 @pytest.fixture(scope='session')
 def eos():
@@ -206,10 +242,15 @@ def eos():
 def creds():
     """ read and yield lab configuration """
     files = glob.glob("../ansible/group_vars/lab/*.yml")
+    files += glob.glob("../ansible/group_vars/all/*.yml")
     creds = {}
     for f in files:
         with open(f) as stream:
-            creds.update(yaml.safe_load(stream))
+            v = yaml.safe_load(stream)
+            if v is not None:
+                creds.update(v)
+            else:
+                logging.info("skip empty var file {}".format(f))
     return creds
 
 
